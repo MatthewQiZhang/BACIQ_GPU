@@ -1,19 +1,9 @@
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
-import pymc3 as pm
-import os
+import pymc as pm
 import sys
-import multiprocessing
 from typing import Tuple
-from baciq import hist_backend
-
-
-def get_num_cores() -> int:
-    if 'SLURM_CPUS_PER_TASK' in os.environ:
-        return int(os.environ['SLURM_CPUS_PER_TASK'])
-    else:
-        return multiprocessing.cpu_count()  # assume local
 
 
 def get_proteins_and_indices(data: pd.DataFrame) -> Tuple[pd.Series, np.array]:
@@ -70,7 +60,6 @@ class PYMC_Model(Base_Modeler):
 
         result = None
         for q in quantiles:
-            # idx = np.argmin(np.abs(quants - q), axis=1)
             idx = np.argmax(quants >= q, axis=1)
             if result is None:
                 result = bins[idx].reshape((len(idx), 1))
@@ -100,20 +89,38 @@ class PYMC_Model(Base_Modeler):
         proteins, idx = get_proteins_and_indices(data)
         with pm.Model():
             τ = pm.Gamma('τ', alpha=7.5, beta=1)
-            BoundedNormal = pm.Bound(pm.Normal, lower=0, upper=1)
-            μ = BoundedNormal('μ', mu=0.5, sigma=1, shape=len(proteins))
+            μ = pm.TruncatedNormal('μ', mu=0.5, sigma=1, lower=0, upper=1,
+                                   shape=len(proteins))
             κ = pm.Exponential('κ', τ, shape=len(proteins))
             pm.BetaBinomial('y', alpha=μ[idx]*κ[idx], beta=(1.0-μ[idx])*κ[idx],
                             n=data['sum'], observed=data[self.channel])
-            db = hist_backend.Histogram(vars=[μ],
-                                        bin_width=bin_width,
-                                        remove_first=self.tuning)
-            pm.sample(draws=self.samples,
-                      tune=self.tuning,
-                      chains=self.chains,
-                      cores=get_num_cores(),
-                      progressbar=sys.stdout.isatty(),
-                      compute_convergence_checks=False,
-                      trace=db)
+            idata = pm.sample(
+                draws=self.samples,
+                tune=self.tuning,
+                chains=self.chains,
+                nuts_sampler='numpyro',
+                progressbar=sys.stdout.isatty(),
+                compute_convergence_checks=False,
+            )
 
-            return proteins, db.hist['μ']
+        # Extract μ posterior samples: shape (chains, draws, n_proteins)
+        mu_samples = idata.posterior['μ'].values
+        n_chains, n_draws, n_proteins = mu_samples.shape
+        # Flatten to (total_samples, n_proteins)
+        mu_flat = mu_samples.reshape(n_chains * n_draws, n_proteins)
+
+        # Build histogram over [0, 1] for each protein
+        num_bins = int(1 / bin_width)
+        hist = np.zeros((n_proteins, num_bins), dtype=int)
+        for i in range(n_proteins):
+            vals = mu_flat[:, i]
+            inds = np.floor(vals / bin_width).astype(int)
+            inds[vals == 1.0] -= 1
+            invalid = np.where((inds < 0) | (inds >= num_bins))
+            if invalid[0].size != 0:
+                raise ValueError(
+                    f'μ sample out of [0, 1] bounds: {vals[invalid[0][0]]}'
+                )
+            np.add.at(hist[i], inds, 1)
+
+        return proteins, hist

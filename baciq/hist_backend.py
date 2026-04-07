@@ -1,5 +1,5 @@
 from __future__ import annotations
-from pymc3.backends import base
+from pymc.backends import base
 import numpy as np
 
 

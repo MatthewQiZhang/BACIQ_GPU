@@ -8,7 +8,9 @@ setup(
     packages=find_packages(),
     install_requires=[
         'Click',
-        'pymc3==3.7',
+        'pymc>=5.0',
+        'numpyro>=0.13',
+        'jax>=0.4',
         'pandas'
     ],
     entry_points='''

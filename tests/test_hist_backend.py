@@ -1,5 +1,5 @@
 from baciq import hist_backend
-import pymc3 as pm
+import pymc as pm
 import pytest
 import numpy as np
 from numpy.testing import assert_array_equal as aae

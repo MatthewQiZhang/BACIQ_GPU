@@ -6,20 +6,6 @@ from numpy.testing import assert_array_equal as aae
 from numpy.testing import assert_allclose as aac
 
 
-def test_get_num_cores(mocker):
-    mocker.patch('baciq.inference_methods.os.environ', {})
-    mocker.patch('baciq.inference_methods.multiprocessing.cpu_count',
-                 return_value=-1)
-
-    # without slurm env variable, get cpu_count
-    assert inference_methods.get_num_cores() == -1
-
-    mocker.patch('baciq.inference_methods.os.environ',
-                 {'SLURM_CPUS_PER_TASK': '5'})
-    # with slurm env variable, get its value as an int
-    assert inference_methods.get_num_cores() == 5
-
-
 def test_get_proteins_and_indices():
     proteins, idx = inference_methods.get_proteins_and_indices(
         pd.DataFrame(
@@ -48,10 +34,7 @@ def test_get_proteins_and_indices():
 
 
 @pytest.fixture
-def pymc(mocker):
-    mocker.patch('baciq.inference_methods.get_num_cores',
-                 return_value='TESTING')
-    mocker.patch('baciq.inference_methods.hist_backend.Histogram')
+def pymc():
     return inference_methods.PYMC_Model(100, 2, 50, 'ch7')
 
 
@@ -64,6 +47,12 @@ def test_PYMC_Model_init(pymc):
 
 def test_PYMC_Model_mcmc_sample(pymc, mocker):
     mock_mc = mocker.patch('baciq.inference_methods.pm')
+
+    # Set up mock idata: posterior['μ'].values -> shape (chains, draws, n_proteins)
+    mock_idata = mocker.MagicMock()
+    mock_idata.posterior.__getitem__.return_value.values = np.zeros((2, 100, 4))
+    mock_mc.sample.return_value = mock_idata
+
     proteins, result = pymc.mcmc_sample(
         pd.DataFrame({
             'Protein ID': 'a b c d a'.split(),
@@ -73,16 +62,14 @@ def test_PYMC_Model_mcmc_sample(pymc, mocker):
         bin_width=0.2)
 
     aae(proteins, 'a b c d'.split())
-    # this checks all the params for the pymc model
+    # Check pm.sample called with GPU (numpyro) sampler, no cores arg
     mock_mc.sample.assert_called_with(
-        chains=2, compute_convergence_checks=False, cores='TESTING',
-        draws=100, progressbar=False, trace=mocker.ANY, tune=50)
-    mock_mc.Gamma.assert_called_with(
-        'τ', alpha=7.5, beta=1)
-    mock_mc.Bound.assert_called_with(
-        mocker.ANY, lower=0, upper=1)
-    mock_mc.Bound.return_value.assert_called_with(
-        'μ', mu=0.5, shape=4, sigma=1)
+        chains=2, compute_convergence_checks=False,
+        draws=100, progressbar=False,
+        nuts_sampler='numpyro', tune=50)
+    mock_mc.Gamma.assert_called_with('τ', alpha=7.5, beta=1)
+    mock_mc.TruncatedNormal.assert_called_with(
+        'μ', mu=0.5, sigma=1, lower=0, upper=1, shape=4)
     mock_mc.Exponential.assert_called_with(
         'κ', mock_mc.Gamma.return_value, shape=4)
     mock_mc.BetaBinomial.assert_called_with(
@@ -105,7 +92,7 @@ def test_PYMC_Model_unmocked_mcmc_sample():
         bin_width=0.1)
 
     aae(proteins, 'b d c a'.split())
-    aae(result.sum(axis=1), [2000, 2000, 2000, 2000])  # 1000 samples * 2 chain
+    aae(result.sum(axis=1), [2000, 2000, 2000, 2000])  # 1000 samples * 2 chains
     bins = np.array(range(10))/10
     aac(np.sum(result * bins[None, :] / 2000, axis=1),
         [0.38, 0.43, 0.45, 0.66], atol=0.05)
@@ -118,7 +105,7 @@ def test_PYMC_Model_unmocked_mcmc_sample():
         bin_width=0.1)
 
     aae(proteins, 'b d c a'.split())
-    aae(result.sum(axis=1), [2000, 2000, 2000, 2000])  # 1000 samples * 2 chain
+    aae(result.sum(axis=1), [2000, 2000, 2000, 2000])  # 1000 samples * 2 chains
     aac(np.sum(result * bins[None, :] / 2000, axis=1),
         [0, 0.2, 0.45, 0.7], atol=0.05)  # this is low because of binning
 
