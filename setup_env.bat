@@ -4,7 +4,7 @@ setlocal EnableDelayedExpansion
 echo.
 echo ================================================================
 echo   BACIQ_GPU Environment Setup
-echo   Creates conda environment: Martin_Lab
+echo   Creates conda environment: BACIQ_GPU
 echo   GPU backend: PyTorch + Pyro (CUDA 12.9)
 echo ================================================================
 echo.
@@ -41,8 +41,8 @@ echo.
 REM ----------------------------------------------------------------
 REM  Step 1 — Create conda environment (Python 3.11)
 REM ----------------------------------------------------------------
-echo [1/7] Creating environment 'Martin_Lab' (Python 3.11)...
-%CONDA_EXE% create -n Martin_Lab python=3.11 -y
+echo [1/7] Creating environment 'BACIQ_GPU' (Python 3.11)...
+%CONDA_EXE% create -n BACIQ_GPU python=3.11 -y
 if errorlevel 1 (
     echo ERROR: Failed to create conda environment.
     pause & exit /b 1
@@ -54,7 +54,7 @@ REM ----------------------------------------------------------------
 REM  Step 2 — conda-forge packages (numpy/pandas come with MKL)
 REM ----------------------------------------------------------------
 echo [2/7] Installing conda-forge packages (pandas, click, pytest, pytest-mock)...
-%CONDA_EXE% install -n Martin_Lab -c conda-forge pandas click pytest pytest-mock -y
+%CONDA_EXE% install -n BACIQ_GPU -c conda-forge pandas click pytest pytest-mock -y
 if errorlevel 1 (
     echo ERROR: conda-forge install failed.
     pause & exit /b 1
@@ -68,7 +68,7 @@ REM  NOTE: must be done BEFORE pyro-ppl so pyro links against CUDA torch
 REM ----------------------------------------------------------------
 echo [3/7] Installing PyTorch (CUDA 12.9)...
 echo        This may take a few minutes (large download ~2 GB).
-%CONDA_EXE% run -n Martin_Lab pip install torch --index-url https://download.pytorch.org/whl/cu129
+%CONDA_EXE% run -n BACIQ_GPU pip install torch --index-url https://download.pytorch.org/whl/cu129
 if errorlevel 1 (
     echo ERROR: PyTorch CUDA install failed.
     pause & exit /b 1
@@ -80,7 +80,7 @@ REM ----------------------------------------------------------------
 REM  Step 4 — Pyro (PyTorch-based Bayesian inference library)
 REM ----------------------------------------------------------------
 echo [4/7] Installing Pyro...
-%CONDA_EXE% run -n Martin_Lab pip install pyro-ppl
+%CONDA_EXE% run -n BACIQ_GPU pip install pyro-ppl
 if errorlevel 1 (
     echo ERROR: Pyro install failed.
     pause & exit /b 1
@@ -95,7 +95,7 @@ REM        Step 6 will re-pin the CUDA version afterwards.
 REM ----------------------------------------------------------------
 echo [5/7] Installing BACIQ_GPU from GitHub...
 echo        (torch dependency will be re-pinned to CUDA in Step 6)
-%CONDA_EXE% run -n Martin_Lab pip install git+https://github.com/MatthewQiZhang/BACIQ_GPU
+%CONDA_EXE% run -n BACIQ_GPU pip install git+https://github.com/MatthewQiZhang/BACIQ_GPU
 if errorlevel 1 (
     echo ERROR: BACIQ_GPU install failed.
     pause & exit /b 1
@@ -109,7 +109,7 @@ REM  pip install BACIQ pulls torch from PyPI (CPU build).
 REM  Force-reinstall the CUDA build without touching other packages.
 REM ----------------------------------------------------------------
 echo [6/7] Re-pinning PyTorch to CUDA 12.9 build...
-%CONDA_EXE% run -n Martin_Lab pip install torch ^
+%CONDA_EXE% run -n BACIQ_GPU pip install torch ^
     --index-url https://download.pytorch.org/whl/cu129 ^
     --force-reinstall --no-deps
 if errorlevel 1 (
@@ -125,7 +125,7 @@ REM  conda-forge numpy uses Intel libiomp5md.dll; PyTorch uses libomp.dll.
 REM  KMP_DUPLICATE_LIB_OK=TRUE suppresses the runtime error safely.
 REM ----------------------------------------------------------------
 echo [7/7] Setting KMP_DUPLICATE_LIB_OK=TRUE for environment...
-%CONDA_EXE% env config vars set KMP_DUPLICATE_LIB_OK=TRUE -n Martin_Lab
+%CONDA_EXE% env config vars set KMP_DUPLICATE_LIB_OK=TRUE -n BACIQ_GPU
 if errorlevel 1 (
     echo WARNING: Could not set env var automatically.
     echo          Add KMP_DUPLICATE_LIB_OK=TRUE to your system environment variables manually.
@@ -164,10 +164,10 @@ set VERIFY_SCRIPT=%TEMP%\baciq_verify.py
     echo print^(f"Proteins : {list^(proteins^)}"^)
     echo print^(f"Samples  : {hist.sum^(axis=1^)}"^)
     echo print^(^)
-    echo print^("SETUP COMPLETE — activate with:  conda activate Martin_Lab"^)
+    echo print^("SETUP COMPLETE — activate with:  conda activate BACIQ_GPU"^)
 ) > %VERIFY_SCRIPT%
 
-%CONDA_EXE% run -n Martin_Lab python %VERIFY_SCRIPT%
+%CONDA_EXE% run -n BACIQ_GPU python %VERIFY_SCRIPT%
 if errorlevel 1 (
     echo.
     echo WARNING: Verification script encountered an error.
