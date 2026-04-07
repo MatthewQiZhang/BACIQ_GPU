@@ -2,6 +2,7 @@ from baciq import inference_methods
 import pytest
 import pandas as pd
 import numpy as np
+import torch
 from numpy.testing import assert_array_equal as aae
 from numpy.testing import assert_allclose as aac
 
@@ -34,26 +35,28 @@ def test_get_proteins_and_indices():
 
 
 @pytest.fixture
-def pymc():
+def pymc_model():
     return inference_methods.PYMC_Model(100, 2, 50, 'ch7')
 
 
-def test_PYMC_Model_init(pymc):
-    assert pymc.samples == 100
-    assert pymc.chains == 2
-    assert pymc.tuning == 50
-    assert pymc.channel == 'ch7'
+def test_PYMC_Model_init(pymc_model):
+    assert pymc_model.samples == 100
+    assert pymc_model.chains == 2
+    assert pymc_model.tuning == 50
+    assert pymc_model.channel == 'ch7'
 
 
-def test_PYMC_Model_mcmc_sample(pymc, mocker):
-    mock_mc = mocker.patch('baciq.inference_methods.pm')
+def test_PYMC_Model_mcmc_sample(pymc_model, mocker):
+    # Mock MCMC instance: get_samples returns mu tensor (samples, n_proteins)
+    mock_mcmc_instance = mocker.MagicMock()
+    mock_mcmc_instance.get_samples.return_value = {
+        'mu': torch.zeros(100, 4)
+    }
+    mock_mcmc_cls = mocker.patch('baciq.inference_methods.MCMC',
+                                  return_value=mock_mcmc_instance)
+    mock_nuts_cls = mocker.patch('baciq.inference_methods.NUTS')
 
-    # Set up mock idata: posterior['μ'].values -> shape (chains, draws, n_proteins)
-    mock_idata = mocker.MagicMock()
-    mock_idata.posterior.__getitem__.return_value.values = np.zeros((2, 100, 4))
-    mock_mc.sample.return_value = mock_idata
-
-    proteins, result = pymc.mcmc_sample(
+    proteins, result = pymc_model.mcmc_sample(
         pd.DataFrame({
             'Protein ID': 'a b c d a'.split(),
             'ch7': [1, 2, 3, 4, 5],
@@ -62,29 +65,29 @@ def test_PYMC_Model_mcmc_sample(pymc, mocker):
         bin_width=0.2)
 
     aae(proteins, 'a b c d'.split())
-    # Check pm.sample called with GPU (numpyro) sampler, no cores arg
-    mock_mc.sample.assert_called_with(
-        chains=2, compute_convergence_checks=False,
-        draws=100, progressbar=False,
-        nuts_sampler='numpyro', tune=50)
-    mock_mc.Gamma.assert_called_with('τ', alpha=7.5, beta=1)
-    mock_mc.TruncatedNormal.assert_called_with(
-        'μ', mu=0.5, sigma=1, lower=0, upper=1, shape=4)
-    mock_mc.Exponential.assert_called_with(
-        'κ', mock_mc.Gamma.return_value, shape=4)
-    mock_mc.BetaBinomial.assert_called_with(
-        'y', alpha=mocker.ANY, beta=mocker.ANY,
-        n=mocker.ANY, observed=mocker.ANY)
 
-    assert (mock_mc.BetaBinomial.call_args[1]['n'] ==
-            [10, 11, 12, 13, 14]).all()
-    assert (mock_mc.BetaBinomial.call_args[1]['observed'] ==
-            [1, 2, 3, 4, 5]).all()
+    # Chains run sequentially, so MCMC/NUTS called once per chain
+    assert mock_mcmc_cls.call_count == pymc_model.chains
+    assert mock_nuts_cls.call_count == pymc_model.chains
+
+    # Check MCMC was constructed with correct parameters each time
+    for call in mock_mcmc_cls.call_args_list:
+        assert call[1]['num_samples'] == 100
+        assert call[1]['warmup_steps'] == 50
+        assert call[1]['num_chains'] == 1
+
+    # run() was called once per chain
+    assert mock_mcmc_instance.run.call_count == pymc_model.chains
+
+    assert (mock_mcmc_instance.run.call_args[0][1] ==
+            torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32)).all()
+    assert (mock_mcmc_instance.run.call_args[0][0] ==
+            torch.tensor([10, 11, 12, 13, 14], dtype=torch.float32)).all()
 
 
 def test_PYMC_Model_unmocked_mcmc_sample():
-    pymc = inference_methods.PYMC_Model(1000, 2, 500, 'ch0')
-    proteins, result = pymc.mcmc_sample(
+    pymc_model = inference_methods.PYMC_Model(1000, 2, 500, 'ch0')
+    proteins, result = pymc_model.mcmc_sample(
         pd.DataFrame({
             'Protein ID': 'b d c a'.split(),
             'ch0': [10, 250, 500, 1000],
@@ -97,7 +100,7 @@ def test_PYMC_Model_unmocked_mcmc_sample():
     aac(np.sum(result * bins[None, :] / 2000, axis=1),
         [0.38, 0.43, 0.45, 0.66], atol=0.05)
 
-    proteins, result = pymc.mcmc_sample(
+    proteins, result = pymc_model.mcmc_sample(
         pd.DataFrame({
             'Protein ID': ['b', 'd', 'c', 'a']*10,
             'ch0': [10, 250, 500, 750]*10,
@@ -107,10 +110,10 @@ def test_PYMC_Model_unmocked_mcmc_sample():
     aae(proteins, 'b d c a'.split())
     aae(result.sum(axis=1), [2000, 2000, 2000, 2000])  # 1000 samples * 2 chains
     aac(np.sum(result * bins[None, :] / 2000, axis=1),
-        [0, 0.2, 0.45, 0.7], atol=0.05)  # this is low because of binning
+        [0, 0.2, 0.45, 0.7], atol=0.05)
 
 
-def test_PYMC_Model_fit_histogram(pymc, mocker):
+def test_PYMC_Model_fit_histogram(pymc_model, mocker):
     mock_sample = mocker.patch.object(
         inference_methods.PYMC_Model, 'mcmc_sample',
         return_value=('a b c'.split(),
@@ -119,12 +122,11 @@ def test_PYMC_Model_fit_histogram(pymc, mocker):
                           [40, 0, 0, 0, 0],
                           [0, 0, 0, 30, 10]
                       ])))
-    result = pymc.fit_histogram(pd.DataFrame({
-        'Protein ID': 'a b c'.split()}),  # doesn't matter
+    result = pymc_model.fit_histogram(pd.DataFrame({
+        'Protein ID': 'a b c'.split()}),
                                 bin_width=0.2)
     mock_sample.assert_called_with(mocker.ANY, 0.2)
 
-    # because pandas df equality is infuriating!
     assert (result.index == 'a b c'.split()).all()
     assert result.index.name == 'Protein ID'
     aac(result.columns.values, [0, 0.2, 0.4, 0.6, 0.8])
@@ -136,7 +138,7 @@ def test_PYMC_Model_fit_histogram(pymc, mocker):
             ]).all()
 
 
-def test_PYMC_Model_fit_quantiles(pymc, mocker):
+def test_PYMC_Model_fit_quantiles(pymc_model, mocker):
     return_quants = np.zeros((3, 10000))
     return_quants[0, 1000:1101] = 1  # 100 1's
     return_quants[1, 0] = 1  # first index
@@ -144,14 +146,13 @@ def test_PYMC_Model_fit_quantiles(pymc, mocker):
     mock_sample = mocker.patch.object(
         inference_methods.PYMC_Model, 'mcmc_sample',
         return_value=('a c b'.split(), return_quants))
-    result = pymc.fit_quantiles(pd.DataFrame({
-        'Protein ID': 'a b c'.split()}),  # doesn't matter
+    result = pymc_model.fit_quantiles(pd.DataFrame({
+        'Protein ID': 'a b c'.split()}),
                                 [0.025, 0.5, 0.975])
     assert mock_sample.call_args[1]['bin_width'] == 0.0001
     assert (result.index == 'a c b'.split()).all()
     assert result.index.name == 'Protein ID'
     assert (result.columns.values == ['0.025', '0.5', '0.975']).all()
-    print(result)
     aac(result.values,
         [
             [0.1002, 0.1050, 0.1098],

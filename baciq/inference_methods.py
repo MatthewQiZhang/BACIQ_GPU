@@ -1,7 +1,10 @@
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
-import pymc as pm
+import torch
+import pyro
+import pyro.distributions as dist
+from pyro.infer import MCMC, NUTS
 import sys
 from typing import Tuple
 
@@ -87,27 +90,45 @@ class PYMC_Model(Base_Modeler):
 
     def mcmc_sample(self, data, bin_width):
         proteins, idx = get_proteins_and_indices(data)
-        with pm.Model():
-            τ = pm.Gamma('τ', alpha=7.5, beta=1)
-            μ = pm.TruncatedNormal('μ', mu=0.5, sigma=1, lower=0, upper=1,
-                                   shape=len(proteins))
-            κ = pm.Exponential('κ', τ, shape=len(proteins))
-            pm.BetaBinomial('y', alpha=μ[idx]*κ[idx], beta=(1.0-μ[idx])*κ[idx],
-                            n=data['sum'], observed=data[self.channel])
-            idata = pm.sample(
-                draws=self.samples,
-                tune=self.tuning,
-                chains=self.chains,
-                nuts_sampler='numpyro',
-                progressbar=sys.stdout.isatty(),
-                compute_convergence_checks=False,
-            )
+        n_proteins = len(proteins)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        # Extract μ posterior samples: shape (chains, draws, n_proteins)
-        mu_samples = idata.posterior['μ'].values
-        n_chains, n_draws, n_proteins = mu_samples.shape
-        # Flatten to (total_samples, n_proteins)
-        mu_flat = mu_samples.reshape(n_chains * n_draws, n_proteins)
+        idx_t = torch.tensor(idx, dtype=torch.long, device=device)
+        n_t = torch.tensor(data['sum'].values, dtype=torch.float32, device=device)
+        obs_t = torch.tensor(
+            data[self.channel].values, dtype=torch.float32, device=device)
+
+        def model(n, obs):
+            tau = pyro.sample('tau', dist.Gamma(
+                torch.tensor(7.5, device=device),
+                torch.tensor(1.0, device=device)))
+            mu = pyro.sample('mu', dist.Uniform(
+                torch.zeros(n_proteins, device=device),
+                torch.ones(n_proteins, device=device)).to_event(1))
+            kappa = pyro.sample('kappa', dist.Exponential(
+                tau * torch.ones(n_proteins, device=device)).to_event(1))
+            alpha = mu[idx_t] * kappa[idx_t]
+            beta_v = (1.0 - mu[idx_t]) * kappa[idx_t]
+            with pyro.plate('obs', len(n)):
+                pyro.sample('y', dist.BetaBinomial(alpha, beta_v, n), obs=obs)
+
+        # Run chains sequentially for Windows GPU compatibility
+        all_mu = []
+        for _ in range(self.chains):
+            pyro.clear_param_store()
+            nuts_kernel = NUTS(model)
+            mcmc = MCMC(
+                nuts_kernel,
+                num_samples=self.samples,
+                warmup_steps=self.tuning,
+                num_chains=1,
+                disable_progbar=not sys.stdout.isatty(),
+            )
+            mcmc.run(n_t, obs_t)
+            all_mu.append(mcmc.get_samples()['mu'].cpu().numpy())
+
+        # shape: (chains * draws, n_proteins)
+        mu_flat = np.concatenate(all_mu, axis=0)
 
         # Build histogram over [0, 1] for each protein
         num_bins = int(1 / bin_width)

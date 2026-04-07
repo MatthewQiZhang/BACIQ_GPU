@@ -1,13 +1,15 @@
 ---
 channels:
   - conda-forge
+  - pytorch
 
 dependencies:
   - python=3.11
-  - pymc>=5.0
-  - numpyro>=0.13
-  - jax>=0.4
+  - pytorch::pytorch>=2.9
+  - pytorch::pytorch-cuda=12.9
   - pytest
   - pytest-mock
   - click
   - pandas
+  - pip:
+    - pyro-ppl>=1.9

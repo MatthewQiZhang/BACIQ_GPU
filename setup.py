@@ -8,9 +8,8 @@ setup(
     packages=find_packages(),
     install_requires=[
         'Click',
-        'pymc>=5.0',
-        'numpyro>=0.13',
-        'jax>=0.4',
+        'torch>=2.9',
+        'pyro-ppl>=1.9',
         'pandas'
     ],
     entry_points='''
