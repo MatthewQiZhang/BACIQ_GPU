@@ -13,12 +13,8 @@ def get_proteins_and_indices(data: pd.DataFrame) -> Tuple[pd.Series, np.array]:
     if 'Protein ID' not in data:
         raise KeyError('Expected "Protein ID" in input data')
 
-    proteins = data['Protein ID'].unique()
-    idx = np.zeros(len(data), dtype=int)
-    for i, p in enumerate(proteins):
-        idx[data['Protein ID'] == p] = i
-
-    return proteins, idx
+    codes, proteins = pd.factorize(data['Protein ID'])
+    return proteins, codes.astype(int)
 
 
 class Base_Modeler(ABC):
@@ -61,15 +57,11 @@ class PYMC_Model(Base_Modeler):
         # scale counts by total, get cumsum
         quants = np.cumsum(samples / np.sum(samples, axis=1)[:, None], axis=1)
 
-        result = None
-        for q in quantiles:
-            idx = np.argmax(quants >= q, axis=1)
-            if result is None:
-                result = bins[idx].reshape((len(idx), 1))
-            else:
-                result = np.hstack((result, bins[idx].reshape((len(idx), 1))))
+        quantiles = np.asarray(quantiles)
+        idx = np.array([np.searchsorted(row, quantiles) for row in quants])
+        idx = np.clip(idx, 0, len(bins) - 1)
 
-        result = pd.DataFrame(result,
+        result = pd.DataFrame(bins[idx],
                               index=proteins,
                               columns=['{:.9g}'.format(q) for q in quantiles])
         result.index.name = "Protein ID"

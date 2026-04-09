@@ -70,8 +70,7 @@ def read_df(infile, channel1, channel2, multiplier, batch_size=None):
     baciq[numeric_columns] = np.around(baciq[numeric_columns]
                                        * multiplier).astype(int)
     # convert values < 1 to 1
-    baciq[numeric_columns] = baciq[numeric_columns].map(
-        lambda x: 1 if x < 1 else x)
+    baciq[numeric_columns] = baciq[numeric_columns].clip(lower=1)
 
     # Sum up the information of requested channels
     if channel2 == 'sum':
